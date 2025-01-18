@@ -26,10 +26,8 @@ pub struct PentanomialResult {
 
 impl PentanomialResult {
     /// Calculate an empirical probability distribution given a set of observed results.
-    pub fn to_pd(self) -> ProbabilityDistribution<5> {
-        fn regularize(value: usize) -> f64 {
-            if value == 0 { 1e-3 } else { value as f64 }
-        }
+    pub fn to_pd(&self) -> ProbabilityDistribution<5> {
+        let regularize = |x| if x == 0 { 1e-3 } else { x as f64 };
         let ll = regularize(self.ll);
         let dl = regularize(self.dl);
         let wl_dd = regularize(self.wl_dd);
@@ -71,7 +69,7 @@ impl<const N: usize> ProbabilityDistribution<N> {
     fn llr(&self, t0: f64, t1: f64) -> f64 {
         let p0 = self.mle(0.5, t0);
         let p1 = self.mle(0.5, t1);
-        self.game_count * mean(core::array::from_fn(|i| p1[i].ln() - p0[i].ln()), self.prob)
+        self.game_count * mean(std::array::from_fn(|i| p1[i].ln() - p0[i].ln()), self.prob)
     }
 
     /// Compute the maximum likelihood estimate for a discrete
@@ -80,8 +78,8 @@ impl<const N: usize> ProbabilityDistribution<N> {
     ///
     /// See section 4.1 of [1] for details.
     fn mle(&self, mu_ref: f64, t_star: f64) -> [f64; N] {
-        let theta_epsilon = 1e-7;
-        let mle_epsilon = 1e-4;
+        const THETA_EPSILON: f64 = 1e-7;
+        const MLE_EPSILON: f64 = 1e-4;
 
         // This is an iterative method, so we need to start with
         // an initial value. As suggested in [1], we start with a
@@ -94,7 +92,7 @@ impl<const N: usize> ProbabilityDistribution<N> {
 
             // Calculate phi.
             let (mu, variance) = mean_and_variance(self.score, p);
-            let phi: [f64; N] = core::array::from_fn(|i| {
+            let phi: [f64; N] = std::array::from_fn(|i| {
                 let a_i = self.score[i];
                 let sigma = variance.sqrt();
                 a_i - mu_ref - 0.5 * t_star * sigma * (1.0 + ((a_i - mu) / sigma).powi(2))
@@ -104,12 +102,10 @@ impl<const N: usize> ProbabilityDistribution<N> {
             // so we need to calculate our constraints for theta.
             let u = phi
                 .iter()
-                .cloned()
                 .min_by(|a, b| a.partial_cmp(b).expect("unexpected NaN"))
                 .unwrap();
             let v = phi
                 .iter()
-                .cloned()
                 .max_by(|a, b| a.partial_cmp(b).expect("unexpected NaN"))
                 .unwrap();
             let min_theta = -1.0 / v;
@@ -126,18 +122,18 @@ impl<const N: usize> ProbabilityDistribution<N> {
                 0.1,
                 1.5,
                 0.99,
-                theta_epsilon,
+                THETA_EPSILON,
             )
             .unwrap();
 
             // Calculate new estimate
-            p = core::array::from_fn(|i| {
+            p = std::array::from_fn(|i| {
                 let phat_i = self.prob[i];
                 phat_i / (1.0 + theta * phi[i])
             });
 
             // Good enough?
-            if (0..N).all(|i| (prev_p[i] - p[i]).abs() < mle_epsilon) {
+            if (0..N).all(|i| (prev_p[i] - p[i]).abs() < MLE_EPSILON) {
                 break;
             }
         }
@@ -164,8 +160,8 @@ impl SprtParameters {
     /// beta : False negative rate (Type II error)
     pub fn new(nelo0: f64, nelo1: f64, alpha: f64, beta: f64) -> SprtParameters {
         let c_et = 800.0 / f64::ln(10.0);
-        let lower_bound = f64::ln(beta / (1.0 - alpha));
-        let upper_bound = f64::ln((1.0 - beta) / alpha);
+        let lower_bound = (beta / (1.0 - alpha)).ln();
+        let upper_bound = ((1.0 - beta) / alpha).ln();
         let t0 = nelo0 / c_et;
         let t1 = nelo1 / c_et;
         SprtParameters {
@@ -182,17 +178,17 @@ impl SprtParameters {
     /// If LLR falls below the lower bound, that demonstrates the hypothesis that elo = elo0 is more likely.
     /// If LLR falls above the upper bound, that demonstrates the hypothesis that elo = elo1 is more likely,
     /// If LLR falls within these bounds, more data is required.
-    pub fn llr_bounds(self: SprtParameters) -> (f64, f64) {
+    pub fn llr_bounds(&self) -> (f64, f64) {
         (self.lower_bound, self.upper_bound)
     }
 
     /// Returns the elo bounds provided to the constructor
-    pub fn nelo_bounds(self: SprtParameters) -> (f64, f64) {
+    pub fn nelo_bounds(&self) -> (f64, f64) {
         (self.nelo0, self.nelo1)
     }
 
     /// Calculates the LLR for the given pentanomial results, given our SPRT parameters
-    pub fn llr(self: SprtParameters, penta: PentanomialResult) -> f64 {
+    pub fn llr(&self, penta: PentanomialResult) -> f64 {
         let pd = penta.to_pd();
         pd.llr(self.t0 * f64::sqrt(2.0), self.t1 * f64::sqrt(2.0))
     }
