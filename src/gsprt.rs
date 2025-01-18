@@ -1,5 +1,20 @@
 use bacon_sci::roots::itp;
 
+/// Pentanomial results considers the result of paired games. Games are generally
+/// played in pairs with the same opening but with reversed colors in order to
+/// reduce opening bias. Since there are correlations between paired games, the
+/// pentanomial model a more accurate model. Notably, it can be used to better
+/// estimate the variance in match score than a trinominal model can.
+///
+/// Taking a loss as a 0, a win as a 1 and a draw as a 1/2, there are five possible
+/// outcomes for a pair of games:
+///
+///    0  : Two losses
+///   1/2 : A loss and a draw
+///    1  : Two draws, or a win and a loss
+///   3/2 : A win and a draw
+///    2  : Two wins
+///
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PentanomialResult {
     pub ll: usize,
@@ -10,9 +25,10 @@ pub struct PentanomialResult {
 }
 
 impl PentanomialResult {
-    pub fn to_pd(self) -> ProbabilityDistribution::<5> {
+    /// Calculate an empirical probability distribution given a set of observed results.
+    pub fn to_pd(self) -> ProbabilityDistribution<5> {
         fn regularize(value: usize) -> f64 {
-            if value == 0 { 1e-9 } else { value as f64 }
+            if value == 0 { 1e-3 } else { value as f64 }
         }
         let ll = regularize(self.ll);
         let dl = regularize(self.dl);
@@ -47,12 +63,7 @@ fn mean<const N: usize>(x: [f64; N], p: [f64; N]) -> f64 {
 
 fn mean_and_variance<const N: usize>(x: [f64; N], p: [f64; N]) -> (f64, f64) {
     let mu = mean(x, p);
-    (
-        mu,
-        (0..N)
-            .map(|i| p[i] * (x[i] - mu).powi(2))
-            .sum(),
-    )
+    (mu, (0..N).map(|i| p[i] * (x[i] - mu).powi(2)).sum())
 }
 
 impl<const N: usize> ProbabilityDistribution<N> {
@@ -81,9 +92,9 @@ impl<const N: usize> ProbabilityDistribution<N> {
             // Store our current estimate away to detect convegence.
             let prev_p = p;
 
-            // Calcluate phi.
+            // Calculate phi.
             let (mu, variance) = mean_and_variance(self.score, p);
-            let phi_i: [f64; N] = core::array::from_fn(|i| {
+            let phi: [f64; N] = core::array::from_fn(|i| {
                 let a_i = self.score[i];
                 let sigma = variance.sqrt();
                 a_i - mu_ref - 0.5 * t_star * sigma * (1.0 + ((a_i - mu) / sigma).powi(2))
@@ -91,11 +102,13 @@ impl<const N: usize> ProbabilityDistribution<N> {
 
             // We need to find a subset of the possible solutions for theta,
             // so we need to calculate our constraints for theta.
-            let u = phi_i.iter()
+            let u = phi
+                .iter()
                 .cloned()
                 .min_by(|a, b| a.partial_cmp(b).expect("unexpected NaN"))
                 .unwrap();
-            let v = phi_i.iter()
+            let v = phi
+                .iter()
                 .cloned()
                 .max_by(|a, b| a.partial_cmp(b).expect("unexpected NaN"))
                 .unwrap();
@@ -107,23 +120,21 @@ impl<const N: usize> ProbabilityDistribution<N> {
                 (min_theta, max_theta),
                 |x: f64| {
                     (0..N)
-                        .map(|i| self.prob[i] * phi_i[i] / (1.0 + x * phi_i[i]))
+                        .map(|i| self.prob[i] * phi[i] / (1.0 + x * phi[i]))
                         .sum()
                 },
                 0.1,
-                2.0,
+                1.5,
                 0.99,
                 theta_epsilon,
             )
             .unwrap();
 
-
             // Calculate new estimate
             p = core::array::from_fn(|i| {
                 let phat_i = self.prob[i];
-                phat_i / (1.0 + theta * phi_i[i])
+                phat_i / (1.0 + theta * phi[i])
             });
-
 
             // Good enough?
             if (0..N).all(|i| (prev_p[i] - p[i]).abs() < mle_epsilon) {
@@ -146,6 +157,11 @@ pub struct SprtParameters {
 }
 
 impl SprtParameters {
+    /// Constructs parameters to use for a SPRT test.
+    /// nelo0 : Represents the H0 hypothesis that the normalized elo difference is nelo0
+    /// nelo1 : Represents the H1 hypothesis that the normalized elo difference is nelo1
+    /// alpha : False positive rate (Type I error)
+    /// beta : False negative rate (Type II error)
     pub fn new(nelo0: f64, nelo1: f64, alpha: f64, beta: f64) -> SprtParameters {
         let c_et = 800.0 / f64::ln(10.0);
         let lower_bound = f64::ln(beta / (1.0 - alpha));
@@ -162,14 +178,20 @@ impl SprtParameters {
         }
     }
 
+    /// Bounds on LLR for SPRT termination.
+    /// If LLR falls below the lower bound, that demonstrates the hypothesis that elo = elo0 is more likely.
+    /// If LLR falls above the upper bound, that demonstrates the hypothesis that elo = elo1 is more likely,
+    /// If LLR falls within these bounds, more data is required.
     pub fn llr_bounds(self: SprtParameters) -> (f64, f64) {
         (self.lower_bound, self.upper_bound)
     }
 
+    /// Returns the elo bounds provided to the constructor
     pub fn nelo_bounds(self: SprtParameters) -> (f64, f64) {
         (self.nelo0, self.nelo1)
     }
 
+    /// Calculates the LLR for the given pentanomial results, given our SPRT parameters
     pub fn llr(self: SprtParameters, penta: PentanomialResult) -> f64 {
         let pd = penta.to_pd();
         pd.llr(self.t0 * f64::sqrt(2.0), self.t1 * f64::sqrt(2.0))
