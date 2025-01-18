@@ -89,7 +89,7 @@ impl<const N: usize> ProbabilityDistribution<N> {
         let mut p = [1.0 / N as f64; N];
 
         loop {
-            // Store our current estimate away to detect convegence.
+            // Store our current estimate away to detect convergence.
             let prev_p = p;
 
             // Calculate phi.
